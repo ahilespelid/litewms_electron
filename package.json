@@ -1,0 +1,68 @@
+{
+  "name": "litewms-desktop",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Desktop shell for LiteWMS: opens the saved cabinet domain in a frameless window.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always",
+    "prebuild": "node scripts/prepare-agent.js"
+  },
+  "build": {
+    "appId": "ru.litewms.desktop",
+    "productName": "LiteWMS",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload-*.js",
+      "*.html",
+      "build/icon.ico",
+      "build/icon.png",
+      "vendor/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ahilespelid",
+        "repo": "litewms_electron"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LiteWMS",
+      "artifactName": "LiteWMS-Desktop-Setup.exe",
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "extraResources": [
+      {
+        "from": "agent",
+        "to": "agent"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

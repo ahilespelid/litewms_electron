@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; background: #0b0d12; color: #c9d1e0;
+    font: 12px "Segoe UI", system-ui, sans-serif; user-select: none; }
+  .bar { display: flex; height: 32px; align-items: center; -webkit-app-region: drag; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 0 12px; font-weight: 600; letter-spacing: .3px; }
+  .dot { width: 18px; height: 18px; border-radius: 4px; -webkit-app-region: no-drag; }
+  .spacer { flex: 1; }
+  .btn { width: 46px; height: 32px; border: 0; background: transparent; color: inherit;
+    display: grid; place-items: center; cursor: default; -webkit-app-region: no-drag; }
+  .btn:hover { background: #ffffff1a; }
+  .btn.close:hover { background: #e5484d; color: #fff; }
+  svg { width: 10px; height: 10px; stroke: currentColor; fill: none; stroke-width: 1; }
+  #update { display: none; -webkit-app-region: no-drag; align-items: center; gap: 6px; height: 22px;
+    margin-right: 4px; padding: 0 10px; border: 0; border-radius: 11px; background: #1c8f6b; color: #fff;
+    font: 11.5px "Segoe UI", system-ui, sans-serif; cursor: default; white-space: nowrap; }
+  #update:hover { background: #1fa376; }
+  #update[data-status="error"] { background: #7a2f33; }
+  #update .dotpulse { width: 6px; height: 6px; border-radius: 50%; background: #fff; flex: 0 0 auto; }
+</style></head>
+<body><div class="bar">
+  <div class="brand"><img class="dot" id="logo" src="build/icon.png" alt="">LiteWMS</div>
+  <div class="spacer"></div>
+  <button id="update"><span class="dotpulse"></span><span id="updateText"></span></button>
+  <button class="btn" id="gear" aria-label="Настройки"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke-width:1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  <button class="btn" id="min" aria-label="Свернуть"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+  <button class="btn" id="max" aria-label="Развернуть"></button>
+  <button class="btn close" id="close" aria-label="Закрыть"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $("gear").onclick = () => shellBar.openSettings();
+  $("min").onclick = () => shellBar.minimize();
+  $("max").onclick = () => shellBar.toggleMaximize();
+  $("close").onclick = () => shellBar.close();
+  const setMax = (m) => {
+    $("max").innerHTML = m
+      ? '<svg viewBox="0 0 10 10"><rect x="2.5" y=".5" width="7" height="7"/><path d="M.5 2.5v7h7"/></svg>'
+      : '<svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg>';
+  };
+  shellBar.onMaxState(setMax);
+  shellBar.isMaximized().then(setMax);
+
+  // Обновление оболочки. Тумблера «включить/выключить» нет: кнопка просто появляется,
+  // когда есть что скачать, и ведёт себя как индикатор процесса.
+  const upd = $("update"), updText = $("updateText");
+  function renderUpdate(state) {
+    upd.dataset.status = state.status;
+    if (state.status === "available") {
+      upd.style.display = "flex";
+      updText.textContent = "Обновление " + (state.version || "") + " — скачать";
+      upd.onclick = () => shellBar.downloadUpdate();
+    } else if (state.status === "downloading") {
+      upd.style.display = "flex";
+      updText.textContent = "Скачивание… " + (state.percent || 0) + "%";
+      upd.onclick = null;
+    } else if (state.status === "ready") {
+      upd.style.display = "flex";
+      updText.textContent = "Перезапустить и установить";
+      upd.onclick = () => shellBar.installUpdate();
+    } else if (state.status === "error") {
+      upd.style.display = "flex";
+      updText.textContent = "Обновление: ошибка проверки";
+      upd.onclick = () => shellBar.checkUpdate();
+    } else {
+      upd.style.display = "none";
+      upd.onclick = null;
+    }
+  }
+  shellBar.onUpdateState(renderUpdate);
+  shellBar.getUpdateState().then(renderUpdate);
+</script></body></html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Настройки</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 24px; background: #0b0d12; color: #e6eaf2; font: 14px "Segoe UI", system-ui, sans-serif; }
+  h2 { font-size: 15px; margin: 22px 0 10px; color: #9fb0cc; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  h2:first-child { margin-top: 0; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  input[type=text], select { flex: 1; padding: 9px 11px; border-radius: 8px; border: 1px solid #2a3142; background: #121622; color: inherit; font-size: 14px; min-width: 0; }
+  input:focus, select:focus { outline: none; border-color: #0fa39a; }
+  button { padding: 9px 14px; border: 0; border-radius: 8px; background: #0a8f88; color: #fff; font-size: 14px; cursor: pointer; }
+  button.alt { background: #262d40; }
+  button:disabled { opacity: .55; cursor: default; }
+  label.chk { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; cursor: pointer; }
+  label.chk input { margin-top: 3px; }
+  .hint { color: #8b95a9; font-size: 12.5px; margin: 4px 0 10px; }
+  .msg { min-height: 18px; font-size: 13px; margin-top: 4px; }
+  .msg.err { color: #ff6b70; } .msg.ok { color: #4cd19a; }
+  .cur { color: #8b95a9; font-size: 13px; margin-bottom: 8px; word-break: break-all; }
+</style></head>
+<body>
+  <h2>Кабинет</h2>
+  <div class="cur">Сейчас: <span id="cur">…</span></div>
+  <div class="row">
+    <input type="text" id="domain" placeholder="litebox или wms.вашдомен.ru" spellcheck="false" autocomplete="off">
+    <button id="changeBtn">Сменить</button>
+  </div>
+  <div class="msg" id="domMsg"></div>
+  <div class="hint">После смены нужно будет заново войти в кабинет.</div>
+
+  <h2>Принтер автопечати</h2>
+  <div class="hint">Когда в разделе FBS включён тумблер «Автопечать», этикетка после скана сразу уходит на этот принтер, без окна печати. Если тумблер выключен, ничего не печатается.</div>
+  <div class="row">
+    <select id="printer"></select>
+    <button class="alt" id="refresh" title="Обновить список">Обновить</button>
+  </div>
+  <div class="hint">Если принтер не выбран, используется принтер по умолчанию в Windows.</div>
+  <div class="row" style="margin-top:14px"><button id="saveBtn">Сохранить</button></div>
+  <div class="msg" id="saveMsg"></div>
+
+  <h2>Обновление приложения</h2>
+  <div class="cur">Версия: <span id="ver">…</span></div>
+  <div class="row"><button class="alt" id="checkUpd">Проверить обновления</button></div>
+  <div class="msg" id="updMsg"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let current = { printer: "" };
+
+  async function loadPrinters(selected) {
+    const list = await shellSettings.printers();
+    const sel = $("printer");
+    sel.textContent = "";
+    const def = document.createElement("option");
+    def.value = ""; def.textContent = "Принтер по умолчанию (Windows)";
+    sel.appendChild(def);
+    list.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.name; o.textContent = p.displayName || p.name;
+      sel.appendChild(o);
+    });
+    // Сохранённый принтер мог пропасть из системы: показываем его, но помечаем.
+    if (selected && !list.some((p) => p.name === selected)) {
+      const o = document.createElement("option");
+      o.value = selected; o.textContent = selected + " (не найден)";
+      sel.appendChild(o);
+    }
+    sel.value = selected || "";
+  }
+
+  function renderUpdateState(state) {
+    const msg = $("updMsg");
+    const btn = $("checkUpd");
+    if (state.status === "checking") { msg.className = "msg"; msg.textContent = "Проверяю…"; btn.disabled = true; return; }
+    btn.disabled = false;
+    if (state.status === "available") { msg.className = "msg ok"; msg.textContent = "Есть новая версия " + (state.version || "") + " — скачается в шапке приложения"; }
+    else if (state.status === "downloading") { msg.className = "msg"; msg.textContent = "Скачивается: " + (state.percent || 0) + "%"; }
+    else if (state.status === "ready") { msg.className = "msg ok"; msg.textContent = "Обновление скачано — нажмите «Перезапустить» в шапке приложения"; }
+    else if (state.status === "error") { msg.className = "msg err"; msg.textContent = "Не удалось проверить: " + (state.message || ""); }
+    else { msg.className = "msg ok"; msg.textContent = "Установлена последняя версия"; }
+  }
+
+  async function init() {
+    current = await shellSettings.get();
+    $("cur").textContent = current.url || "не задан";
+    $("ver").textContent = current.version || "—";
+    await loadPrinters(current.printer);
+    shellSettings.onUpdateState(renderUpdateState);
+    shellSettings.getUpdateState().then(renderUpdateState);
+  }
+
+  $("checkUpd").onclick = () => { $("checkUpd").disabled = true; $("updMsg").className = "msg"; $("updMsg").textContent = "Проверяю…"; shellSettings.checkUpdate(); };
+
+  $("refresh").onclick = () => loadPrinters($("printer").value);
+  $("saveBtn").onclick = async () => {
+    await shellSettings.save({ printer: $("printer").value });
+    $("saveMsg").className = "msg ok"; $("saveMsg").textContent = "Сохранено";
+    setTimeout(() => { $("saveMsg").textContent = ""; }, 2000);
+  };
+  $("changeBtn").onclick = async () => {
+    const msg = $("domMsg");
+    const btn = $("changeBtn");
+    btn.disabled = true; msg.className = "msg"; msg.textContent = "Проверяю…";
+    const res = await shellSettings.changeCabinet($("domain").value);
+    btn.disabled = false;
+    if (res.ok) { msg.className = "msg ok"; msg.textContent = "Готово"; $("cur").textContent = res.url; $("domain").value = ""; }
+    else { msg.className = "msg err"; msg.textContent = res.error; }
+  };
+  init();
+</script></body></html>

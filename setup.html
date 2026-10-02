@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: grid; place-items: center; background: #0b0d12; color: #e6eaf2;
+    font: 14px "Segoe UI", system-ui, sans-serif; }
+  form { width: 380px; display: grid; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  p { margin: 0; color: #8b95a9; font-size: 13px; }
+  input { padding: 11px 12px; border-radius: 8px; border: 1px solid #2a3142; background: #121622; color: inherit; font-size: 14px; }
+  input:focus { outline: none; border-color: #4f8cff; }
+  button { padding: 11px; border: 0; border-radius: 8px; background: #4f8cff; color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .err { color: #ff6b70; min-height: 18px; font-size: 13px; }
+</style></head>
+<body><form id="f">
+  <h1>Адрес кабинета</h1>
+  <p>Например: <b>litebox</b> или <b>wms.вашдомен.ru</b></p>
+  <input id="url" autofocus autocomplete="off" spellcheck="false" placeholder="litebox.litewms.ru">
+  <div class="err" id="err"></div>
+  <button id="go">Продолжить</button>
+</form>
+<script>
+  const err = document.getElementById("err");
+  err.textContent = new URLSearchParams(location.search).get("error") || "";
+  document.getElementById("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const go = document.getElementById("go");
+    go.disabled = true;
+    err.textContent = "Проверяю…";
+    const res = await shellSetup.connect(document.getElementById("url").value);
+    if (!res.ok) { err.textContent = res.error; go.disabled = false; }
+  });
+</script></body></html>

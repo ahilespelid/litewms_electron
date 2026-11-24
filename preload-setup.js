@@ -12,6 +12,7 @@ if (location.protocol === "file:") {
   contextBridge.exposeInMainWorld("__lwShell", {
     getPdfAssets: () => ipcRenderer.invoke("pdf:assets"),
     printFrame: (html) => ipcRenderer.invoke("print:frame", html),
+    savePdf: (bytes, suggestedName) => ipcRenderer.invoke("documents:save-pdf", bytes, suggestedName),
   });
   webFrame.executeJavaScript(`(${lwInstallPdfShim.toString()})()`).catch(() => {});
 }
@@ -39,9 +40,25 @@ function lwInstallPdfShim() {
   async function renderPdf(url) {
     const res = await fetch(url);
     const type = res.headers.get("content-type") || "";
+    const disposition = res.headers.get("content-disposition") || "";
     const buf = await res.arrayBuffer();
     const isPdf = String.fromCharCode(...new Uint8Array(buf.slice(0, 5))) === "%PDF-";
     if (!isPdf) return { pdf: false, type };
+    // Открытие blob: для просмотра/печати не запускает обычное скачивание.
+    // Сохраняем исходный PDF в папку LiteWMS до преобразования страниц в картинки.
+    let suggestedName = document.title || "LiteWMS PDF";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename\s*=\s*"?([^";]+)"?/i)?.[1];
+    try {
+      if (encodedName) suggestedName = decodeURIComponent(encodedName);
+      else if (plainName) suggestedName = plainName;
+      else {
+        const pathname = new URL(url, location.href).pathname;
+        const tail = pathname.split("/").filter(Boolean).pop();
+        if (tail && /\.pdf$/i.test(tail)) suggestedName = decodeURIComponent(tail);
+      }
+    } catch (_) {}
+    window.__lwShell.savePdf(new Uint8Array(buf), suggestedName).catch(() => {});
     const L = await loadLib();
     const doc = await L.getDocument({ data: new Uint8Array(buf) }).promise;
     const pages = [];
@@ -110,12 +127,28 @@ function lwInstallPdfShim() {
     return Promise.all(loaded);
   }
 
-  // window.open(blob:…): окно печати/просмотра. Окно about:blank того же источника, что и
-  // кабинет, поэтому страница дальше ведёт себя как в браузере (print, focus, afterprint).
-  const nativeOpen = window.open;
-  window.open = function (url, target, features) {
-    if (typeof url !== "string" || !url.startsWith("blob:")) return nativeOpen.apply(this, arguments);
-    const w = nativeOpen.call(window, "", target, features);
+  function withoutOpenerFlags(features) {
+    return String(features || "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part && !/^(noopener|noreferrer)(=|$)/i.test(part))
+      .join(",");
+  }
+
+  function isOwnDocumentUrl(value) {
+    try {
+      const url = new URL(value, location.href);
+      if (url.origin !== location.origin) return false;
+      return /\/(?:download|pdf|labels?|package-label|task-sheet)(?:\/|$)/i.test(url.pathname)
+        || /(?:^|\/)[^/]*pdf(?:\/|$)/i.test(url.pathname)
+        || /\.pdf$/i.test(url.pathname)
+        || url.searchParams.get("inline") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function loadPdfIntoWindow(w, url) {
     if (!w) return w;
     const nativePrint = w.print.bind(w);
     let ready = null;
@@ -136,6 +169,85 @@ function lwInstallPdfShim() {
       try { const st = w.document.createElement("div"); st.textContent = "Не удалось показать документ"; w.document.body.appendChild(st); } catch (_) {}
     });
     return w;
+  }
+
+  function openPdfWindow(url, target, features) {
+    // `noopener` по стандарту заставляет window.open() вернуть null. Для своей
+    // внутренней заготовки временно убираем флаг, получаем ссылку на окно и тут
+    // же обнуляем opener — защита сохраняется, а PDF можно дорисовать.
+    const w = nativeOpen.call(window, "", target, withoutOpenerFlags(features));
+    if (!w) return w;
+    try { w.opener = null; } catch (_) {}
+    return loadPdfIntoWindow(w, url);
+  }
+
+  // Некоторые экраны сначала открывают пустую вкладку синхронно (чтобы браузер
+  // не заблокировал popup), а после ответа API делают `tab.location.href = blob`.
+  // Возвращаем совместимую обёртку, которая перехватит только PDF-навигацию;
+  // document, print, focus, closed и остальные свойства идут в настоящее окно.
+  const blankWindowWrappers = new WeakMap();
+  function wrapBlankWindow(w) {
+    if (!w || blankWindowWrappers.has(w)) return blankWindowWrappers.get(w) || w;
+    let wrapper = null;
+    const locationProxy = new Proxy({}, {
+      get(_target, prop) {
+        if (prop === "assign" || prop === "replace") {
+          return (value) => {
+            if (typeof value === "string" && (value.startsWith("blob:") || isOwnDocumentUrl(value))) {
+              loadPdfIntoWindow(w, value);
+              return;
+            }
+            w.location[prop](value);
+          };
+        }
+        const value = w.location[prop];
+        return typeof value === "function" ? value.bind(w.location) : value;
+      },
+      set(_target, prop, value) {
+        if (prop === "href" && typeof value === "string" && (value.startsWith("blob:") || isOwnDocumentUrl(value))) {
+          loadPdfIntoWindow(w, value);
+          return true;
+        }
+        w.location[prop] = value;
+        return true;
+      },
+    });
+    wrapper = new Proxy({}, {
+      get(_target, prop) {
+        if (prop === "location") return locationProxy;
+        if (prop === "window" || prop === "self") return wrapper;
+        const value = w[prop];
+        return typeof value === "function" ? value.bind(w) : value;
+      },
+      set(_target, prop, value) {
+        if (prop === "location" && typeof value === "string" && (value.startsWith("blob:") || isOwnDocumentUrl(value))) {
+          loadPdfIntoWindow(w, value);
+          return true;
+        }
+        w[prop] = value;
+        return true;
+      },
+    });
+    blankWindowWrappers.set(w, wrapper);
+    return wrapper;
+  }
+
+  // window.open(blob:…) и прямые ссылки на PDF кабинета: окно about:blank того
+  // же источника, поэтому страница дальше ведёт себя как в браузере
+  // (print, focus, afterprint), а Electron не отдаёт PDF сломанному viewer.
+  const nativeOpen = window.open;
+  window.open = function (url, target, features) {
+    if (typeof url !== "string") return nativeOpen.apply(this, arguments);
+    if (url.startsWith("blob:") || isOwnDocumentUrl(url)) return openPdfWindow(url, target, features);
+    if (url === "" || url === "about:blank") {
+      const protectedOpen = /(?:^|,|\s)(?:noopener|noreferrer)(?:=|,|\s|$)/i.test(String(features || ""));
+      const w = protectedOpen
+        ? nativeOpen.call(window, url, target, withoutOpenerFlags(features))
+        : nativeOpen.apply(this, arguments);
+      if (protectedOpen && w) { try { w.opener = null; } catch (_) {} }
+      return wrapBlankWindow(w);
+    }
+    return nativeOpen.apply(this, arguments);
   };
 
   // Автопечать: при включённом тумблере кабинет печатает стикер скрытым iframe с blob-PDF

@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("shellSettings", {
   get: () => ipcRenderer.invoke("settings:get"),
   printers: () => ipcRenderer.invoke("settings:printers"),
   save: (values) => ipcRenderer.invoke("settings:save", values),
+  openDocuments: () => ipcRenderer.invoke("documents:open-folder"),
   changeCabinet: (value) => ipcRenderer.invoke("settings:change-cabinet", value),
   checkUpdate: () => ipcRenderer.invoke("shell:check-update"),
   getUpdateState: () => ipcRenderer.invoke("shell:get-update-state"),

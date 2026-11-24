@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; worker-src 'self' blob:">
+  <title>Печать PDF</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #e9ecef; color: #1f2937; font: 14px "Segoe UI", system-ui, sans-serif; }
+    #toolbar { position: sticky; top: 0; z-index: 10; height: 52px; display: flex; align-items: center; gap: 9px; padding: 0 14px; background: #fff; border-bottom: 1px solid #cfd4da; box-shadow: 0 1px 5px #0002; }
+    #toolbar button { height: 34px; padding: 0 17px; border: 0; border-radius: 8px; background: #0a6b66; color: #fff; font: 600 14px "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+    #toolbar button.alt { background: #e9ecef; color: #1f2937; }
+    #toolbar button:disabled { opacity: .55; cursor: default; }
+    #filename { min-width: 0; margin-left: 4px; color: #5f6874; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #status { padding: 28px; text-align: center; color: #677180; }
+    #pages { padding: 12px 12px 28px; }
+    .page { display: block; margin: 12px auto; background: #fff; box-shadow: 0 2px 9px #0003; overflow: hidden; break-after: page; page-break-after: always; }
+    .page:last-child { break-after: auto; page-break-after: auto; }
+    .page canvas { display: block; width: 100%; height: 100%; }
+    @media print {
+      html, body { background: #fff; }
+      #toolbar, #status { display: none !important; }
+      #pages { padding: 0; }
+      .page { margin: 0; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="print" disabled>Печать</button>
+    <button id="folder" class="alt">Показать в папке</button>
+    <div id="filename"></div>
+  </div>
+  <div id="status">Готовим документ…</div>
+  <div id="pages"></div>
+  <script src="vendor/pdf.min.js"></script>
+  <script>
+    const status = document.getElementById("status");
+    const pagesRoot = document.getElementById("pages");
+    const printButton = document.getElementById("print");
+    let printPageSize = null;
+    printButton.onclick = () => litewmsPdfViewer.print(printPageSize);
+    document.getElementById("folder").onclick = () => litewmsPdfViewer.showInFolder();
+
+    function pageName(width, height, index) {
+      return `lw-page-${Math.round(width)}-${Math.round(height)}-${index}`;
+    }
+
+    async function render() {
+      const source = await litewmsPdfViewer.getDocument();
+      if (!source?.data) throw new Error("Файл PDF недоступен");
+      document.title = source.name || "Печать PDF";
+      document.getElementById("filename").textContent = source.name || "";
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(source.data) }).promise;
+      const pageCss = document.createElement("style");
+      const css = [];
+      for (let number = 1; number <= pdf.numPages; number++) {
+        const page = await pdf.getPage(number);
+        const base = page.getViewport({ scale: 1 });
+        if (!printPageSize) {
+          printPageSize = {
+            width: Math.round(base.width * 25400 / 72),
+            height: Math.round(base.height * 25400 / 72),
+          };
+        }
+        const scale = Math.min(300 / 72, 3200 / Math.max(base.width, base.height));
+        const viewport = page.getViewport({ scale });
+        const name = pageName(base.width, base.height, number);
+        css.push(`@page ${name}{size:${base.width}pt ${base.height}pt;margin:0}`);
+        const holder = document.createElement("div");
+        holder.className = "page";
+        holder.style.cssText = `page:${name};width:${base.width}pt;height:${base.height}pt`;
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        holder.appendChild(canvas);
+        pagesRoot.appendChild(holder);
+        const context = canvas.getContext("2d");
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: context, viewport }).promise;
+        page.cleanup();
+      }
+      pageCss.textContent = css.join("");
+      document.head.appendChild(pageCss);
+      status.remove();
+      printButton.disabled = false;
+    }
+
+    render().catch((error) => {
+      status.textContent = `Не удалось показать PDF: ${error?.message || error}`;
+    });
+  </script>
+</body>
+</html>

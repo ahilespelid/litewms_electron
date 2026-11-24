@@ -1,13 +1,13 @@
 {
   "name": "litewms-desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Desktop shell for LiteWMS: opens the saved cabinet domain in a frameless window.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win nsis",
-    "release": "electron-builder --win nsis --publish always",
+    "build": "electron-builder --win nsis --x64",
+    "release": "electron-builder --win nsis --x64 --publish always",
     "prebuild": "node scripts/prepare-agent.js"
   },
   "build": {

@@ -51,6 +51,41 @@ function notifySaved(target) {
   note.on("click", () => shell.showItemInFolder(target));
   note.show();
 }
+
+const pdfViewerFiles = new Map();
+
+function looksLikePdf(target) {
+  let fd = null;
+  try {
+    fd = fs.openSync(target, "r");
+    const signature = Buffer.alloc(5);
+    return fs.readSync(fd, signature, 0, 5, 0) === 5 && signature.toString("ascii") === "%PDF-";
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+function openSavedPdf(target) {
+  if (!looksLikePdf(target)) return;
+  const preview = new BrowserWindow({
+    width: 1000,
+    height: 760,
+    minWidth: 620,
+    minHeight: 480,
+    title: path.basename(target),
+    icon: path.join(__dirname, "build", "icon.ico"),
+    backgroundColor: "#e9ecef",
+    autoHideMenuBar: true,
+    webPreferences: secureWebPrefs({ preload: path.join(__dirname, "preload-pdf-viewer.js") }),
+  });
+  preview.removeMenu();
+  const previewId = preview.webContents.id;
+  pdfViewerFiles.set(previewId, target);
+  preview.webContents.once("destroyed", () => pdfViewerFiles.delete(previewId));
+  preview.loadFile(path.join(__dirname, "pdf-viewer.html"));
+}
 const loadDomain = () => readSettings().url || "";
 const saveDomain = (url) => writeSettings({ url });
 const clearDomain = () => writeSettings({ url: "" });
@@ -274,6 +309,7 @@ function setupDownloads() {
     item.once("done", (_ev, state) => {
       if (state !== "completed") return;
       notifySaved(target);
+      if (path.extname(target).toLowerCase() === ".pdf") openSavedPdf(target);
     });
   });
 }
@@ -491,6 +527,34 @@ ipcMain.handle("settings:save", (e, values) => {
 ipcMain.handle("documents:open-folder", (e) => {
   if (!fromSettings(e)) return;
   shell.openPath(ensureDocumentsPath());
+});
+ipcMain.handle("pdf-viewer:get-document", (e) => {
+  const target = pdfViewerFiles.get(e.sender.id);
+  if (!target || !looksLikePdf(target)) return null;
+  const data = fs.readFileSync(target);
+  if (data.length > 128 * 1024 * 1024) return null;
+  return { name: path.basename(target), data };
+});
+ipcMain.handle("pdf-viewer:show-in-folder", (e) => {
+  const target = pdfViewerFiles.get(e.sender.id);
+  if (target) shell.showItemInFolder(target);
+});
+ipcMain.handle("pdf-viewer:print", (e, requestedSize) => {
+  const target = pdfViewerFiles.get(e.sender.id);
+  if (!target) return false;
+  const width = Math.round(Number(requestedSize?.width));
+  const height = Math.round(Number(requestedSize?.height));
+  const options = {
+    silent: false,
+    printBackground: true,
+    margins: { marginType: "none" },
+  };
+  if (width >= 1000 && width <= 2000000 && height >= 1000 && height <= 2000000) {
+    options.pageSize = { width, height };
+  }
+  return new Promise((resolve) => {
+    e.sender.print(options, (success) => resolve(success));
+  });
 });
 ipcMain.handle("settings:change-cabinet", async (e, input) => {
   if (!fromSettings(e)) return { ok: false, error: "Недоступно" };

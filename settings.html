@@ -40,6 +40,11 @@
   <div class="row" style="margin-top:14px"><button id="saveBtn">Сохранить</button></div>
   <div class="msg" id="saveMsg"></div>
 
+  <h2>Документы LiteWMS</h2>
+  <div class="cur" id="documentsPath">…</div>
+  <div class="hint">Все скачивания и PDF, открытые для печати, автоматически сохраняются сюда.</div>
+  <div class="row"><button class="alt" id="openDocuments">Открыть папку</button></div>
+
   <h2>Обновление приложения</h2>
   <div class="cur">Версия: <span id="ver">…</span></div>
   <div class="row"><button class="alt" id="checkUpd">Проверить обновления</button></div>
@@ -86,6 +91,7 @@
     current = await shellSettings.get();
     $("cur").textContent = current.url || "не задан";
     $("ver").textContent = current.version || "—";
+    $("documentsPath").textContent = current.documentsPath || "Документы/LiteWMS";
     await loadPrinters(current.printer);
     shellSettings.onUpdateState(renderUpdateState);
     shellSettings.getUpdateState().then(renderUpdateState);
@@ -94,6 +100,7 @@
   $("checkUpd").onclick = () => { $("checkUpd").disabled = true; $("updMsg").className = "msg"; $("updMsg").textContent = "Проверяю…"; shellSettings.checkUpdate(); };
 
   $("refresh").onclick = () => loadPrinters($("printer").value);
+  $("openDocuments").onclick = () => shellSettings.openDocuments();
   $("saveBtn").onclick = async () => {
     await shellSettings.save({ printer: $("printer").value });
     $("saveMsg").className = "msg ok"; $("saveMsg").textContent = "Сохранено";

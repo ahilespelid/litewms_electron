@@ -6,6 +6,7 @@ const path = require("node:path");
 const TITLEBAR_HEIGHT = 32;
 const PARTITION = "persist:litewms";
 const settingsPath = () => path.join(app.getPath("userData"), "settings.json");
+const documentsPath = () => path.join(app.getPath("documents"), "LiteWMS");
 
 let win = null;
 let titlebarView = null;
@@ -25,6 +26,30 @@ function readSettings() {
 function writeSettings(patch) {
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify({ ...readSettings(), ...patch }), "utf8");
+}
+
+function ensureDocumentsPath() {
+  try {
+    const dir = documentsPath();
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    // Корпоративные политики иногда запрещают запись в «Документы». Само
+    // приложение из-за этого падать не должно — оставляем заметный запасной путь.
+    const fallback = path.join(app.getPath("downloads"), "LiteWMS");
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+}
+
+function notifySaved(target) {
+  if (!Notification.isSupported()) return;
+  const note = new Notification({
+    title: "Документ сохранён",
+    body: `${path.basename(target)} · Документы/LiteWMS`,
+  });
+  note.on("click", () => shell.showItemInFolder(target));
+  note.show();
 }
 const loadDomain = () => readSettings().url || "";
 const saveDomain = (url) => writeSettings({ url });
@@ -220,12 +245,9 @@ function addPrintBar(contents) {
 async function savePdfOf(contents) {
   const title = (contents.getTitle() || "document").replace(/[\/:*?"<>|]+/g, " ").trim() || "document";
   const data = await contents.printToPDF({ printBackground: true, preferCSSPageSize: true });
-  fs.mkdirSync(app.getPath("downloads"), { recursive: true });
-  const target = uniquePath(app.getPath("downloads"), `${title}.pdf`);
+  const target = uniquePath(ensureDocumentsPath(), `${title}.pdf`);
   fs.writeFileSync(target, data);
-  const note = new Notification({ title: "Файл скачан", body: path.basename(target) });
-  note.on("click", () => shell.showItemInFolder(target));
-  note.show();
+  notifySaved(target);
 }
 
 // Те же правила для окон, которые кабинет открыл сам (этикетка может открыть ещё окно).
@@ -233,24 +255,25 @@ app.on("web-contents-created", (_e, contents) => {
   if (contents.getType() === "window") guardNavigation(contents);
 });
 
-// Скачивание (xlsx, zip, csv): без диалога, в «Загрузки», с уведомлением.
+// Все документы кабинета складываем в одну предсказуемую папку. Это важно для
+// файлов, которые веб-страница создаёт через pdf.save(): у них нет отдельного
+// окна, и без заметной папки оператор воспринимает скачивание как неработающее.
 function uniquePath(dir, name) {
-  const ext = path.extname(name);
-  const base = path.basename(name, ext);
-  let candidate = path.join(dir, name);
+  const cleanName = path.basename(String(name || "download"));
+  const ext = path.extname(cleanName);
+  const base = path.basename(cleanName, ext);
+  let candidate = path.join(dir, cleanName);
   for (let i = 1; fs.existsSync(candidate); i++) candidate = path.join(dir, `${base} (${i})${ext}`);
   return candidate;
 }
 
 function setupDownloads() {
   session.fromPartition(PARTITION).on("will-download", (_e, item) => {
-    const target = uniquePath(app.getPath("downloads"), item.getFilename() || "download");
+    const target = uniquePath(ensureDocumentsPath(), item.getFilename() || "download");
     item.setSavePath(target);
     item.once("done", (_ev, state) => {
       if (state !== "completed") return;
-      const note = new Notification({ title: "Файл скачан", body: path.basename(target) });
-      note.on("click", () => shell.showItemInFolder(target));
-      note.show();
+      notifySaved(target);
     });
   });
 }
@@ -449,7 +472,12 @@ ipcMain.handle("shell:open-settings", (e) => { if (fromTitlebar(e)) openSettings
 ipcMain.handle("settings:get", (e) => {
   if (!fromSettings(e)) return {};
   const s = readSettings();
-  return { url: s.url || "", printer: s.printer || "", version: app.getVersion() };
+  return {
+    url: s.url || "",
+    printer: s.printer || "",
+    version: app.getVersion(),
+    documentsPath: ensureDocumentsPath(),
+  };
 });
 ipcMain.handle("settings:printers", async (e) => {
   if (!fromSettings(e)) return [];
@@ -459,6 +487,10 @@ ipcMain.handle("settings:printers", async (e) => {
 ipcMain.handle("settings:save", (e, values) => {
   if (!fromSettings(e)) return;
   writeSettings({ printer: String(values.printer || "") });
+});
+ipcMain.handle("documents:open-folder", (e) => {
+  if (!fromSettings(e)) return;
+  shell.openPath(ensureDocumentsPath());
 });
 ipcMain.handle("settings:change-cabinet", async (e, input) => {
   if (!fromSettings(e)) return { ok: false, error: "Недоступно" };
@@ -529,6 +561,35 @@ ipcMain.handle("pdf:assets", () => {
   return pdfAssets;
 });
 
+// Blob-PDF, который страница открывает для печати, Chromium не считает
+// скачиванием. Сохраняем исходные байты отдельно: документ остаётся у оператора
+// даже после печати или отмены диалога.
+ipcMain.handle("documents:save-pdf", (e, bytes, suggestedName) => {
+  if (!fromContent(e)) return { ok: false };
+  let data;
+  try {
+    data = Buffer.from(bytes);
+  } catch {
+    return { ok: false };
+  }
+  if (data.length < 5 || data.length > 128 * 1024 * 1024) return { ok: false };
+  if (data.subarray(0, 5).toString("ascii") !== "%PDF-") return { ok: false };
+  const title = String(suggestedName || "LiteWMS PDF")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\.pdf$/i, "")
+    .slice(0, 120)
+    .trim() || "LiteWMS PDF";
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    + ` ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const target = uniquePath(ensureDocumentsPath(), `${title} ${stamp}.pdf`);
+  fs.writeFileSync(target, data);
+  notifySaved(target);
+  return { ok: true, path: target };
+});
+
 // ---------- автообновление оболочки ----------
 // Обновляется только сама Electron-оболочка (main.js, окна, печать). Сайт кабинета
 // обновляется сам собой — этого механизма не касается.
@@ -587,6 +648,7 @@ ipcMain.handle("setup:connect", async (e, input) => {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  ensureDocumentsPath();
   createWindow();
 });
 app.on("second-instance", () => {
